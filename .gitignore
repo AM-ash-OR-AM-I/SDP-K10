@@ -131,3 +131,5 @@ results/*
 
 # VSCode files
 .vscode/*
+README2.md
+*.zip
