@@ -1,4 +1,9 @@
 import argparse
+import logging
+import os
+import random
+import time
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -6,6 +11,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms as T
 from networks.DAEFormer_new import DAEFormer
 from datasets.dataset_kvasir import KvasirSegDataset
+from tqdm import tqdm
 
 
 def parse_args():
@@ -76,16 +82,51 @@ def parse_args():
         choices=["cuda", "cpu"],
         help="Device to use for training (default: cuda)",
     )
+    parser.add_argument(
+        "--seed", type=int, default=1234, help="Random seed (default: 1234)"
+    )
+    parser.add_argument(
+        "--deterministic",
+        type=int,
+        default=1,
+        help="Whether to use deterministic training (default: 1)",
+    )
 
     return parser.parse_args()
+
+
+def setup_logging(args):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s.%(msecs)03d] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.info(str(args))
+
+
+def set_seed(seed, deterministic=True):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    else:
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
 
 
 def main():
     args = parse_args()
 
-    # Create save directory if it doesn't exist
-    import os
+    # Setup logging
+    setup_logging(args)
 
+    # Set random seed
+    set_seed(args.seed, args.deterministic)
+
+    # Create save directory if it doesn't exist
     os.makedirs(args.save_dir, exist_ok=True)
 
     # Dataset and DataLoader
@@ -101,7 +142,13 @@ def main():
     )
 
     dataloader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True,  # Enable pinned memory for faster GPU transfer
+        prefetch_factor=2,  # Number of batches to prefetch
+        persistent_workers=True,  # Keep workers alive between epochs
     )
 
     # Model, Loss, Optimizer
@@ -113,26 +160,92 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     # Training Loop
+    logging.info(f"Starting training on {device}")
+    logging.info(f"Dataset size: {len(dataset)}")
+    logging.info(f"Batch size: {args.batch_size}")
+    logging.info(f"Number of epochs: {args.num_epochs}")
+
+    best_loss = float("inf")
     for epoch in range(args.num_epochs):
         model.train()
         running_loss = 0.0
+        epoch_start_time = time.time()
 
-        for images, masks in dataloader:
-            images, masks = images.to(device), masks.to(device)
+        # Progress bar
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs}")
+
+        for batch_idx, (images, masks) in enumerate(pbar):
+            batch_start_time = time.time()
+
+            # Move data to device
+            images, masks = images.to(device, non_blocking=True), masks.to(
+                device, non_blocking=True
+            )
+            data_load_time = time.time() - batch_start_time
 
             optimizer.zero_grad()
+
+            # Forward pass
+            forward_start_time = time.time()
             outputs = model(images)
+            forward_time = time.time() - forward_start_time
+
             outputs = outputs.squeeze(1)  # [B, H, W]
             loss = criterion(outputs, masks.squeeze(1))
+
+            # Backward pass
+            backward_start_time = time.time()
             loss.backward()
             optimizer.step()
+            backward_time = time.time() - backward_start_time
 
             running_loss += loss.item() * images.size(0)
 
-        epoch_loss = running_loss / len(dataset)
-        print(f"Epoch [{epoch+1}/{args.num_epochs}], Loss: {epoch_loss:.4f}")
+            # Update progress bar with timing information
+            pbar.set_postfix(
+                {
+                    "loss": f"{loss.item():.4f}",
+                    "avg_loss": f"{running_loss/((batch_idx+1)*args.batch_size):.4f}",
+                    "data_time": f"{data_load_time:.3f}s",
+                    "forward_time": f"{forward_time:.3f}s",
+                    "backward_time": f"{backward_time:.3f}s",
+                }
+            )
 
-        # Save model checkpoint
+            if batch_idx == 0:  # Log shapes only for first batch
+                logging.info(f"images shape: {images.shape}")
+                logging.info(f"masks shape: {masks.shape}")
+                logging.info(f"outputs shape: {outputs.shape}")
+                logging.info(f"Data load time: {data_load_time:.3f}s")
+                logging.info(f"Forward pass time: {forward_time:.3f}s")
+                logging.info(f"Backward pass time: {backward_time:.3f}s")
+
+        epoch_loss = running_loss / len(dataset)
+        epoch_time = time.time() - epoch_start_time
+
+        # Log epoch statistics
+        logging.info(
+            f"Epoch [{epoch+1}/{args.num_epochs}] "
+            f"Loss: {epoch_loss:.4f} "
+            f"Time: {epoch_time:.2f}s"
+        )
+
+        # Save best model
+        if epoch_loss < best_loss:
+            best_loss = epoch_loss
+            best_model_path = os.path.join(args.save_dir, "best_model.pth")
+            torch.save(
+                {
+                    "epoch": epoch + 1,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "loss": epoch_loss,
+                },
+                best_model_path,
+            )
+            logging.info(f"New best model saved: {best_model_path}")
+
+        # Save regular checkpoint
         if (epoch + 1) % args.save_interval == 0:
             checkpoint_path = os.path.join(
                 args.save_dir, f"daeformer_kvasir_epoch{epoch+1}.pth"
@@ -146,9 +259,10 @@ def main():
                 },
                 checkpoint_path,
             )
-            print(f"Checkpoint saved: {checkpoint_path}")
+            logging.info(f"Checkpoint saved: {checkpoint_path}")
 
-    print("Training complete!")
+    logging.info("Training complete!")
+    logging.info(f"Best loss achieved: {best_loss:.4f}")
 
 
 if __name__ == "__main__":

@@ -5,3 +5,4 @@ einops>=0.3.0
 tensorboardX
 medpy
 matplotlib>=3.3.0
+tqdm
