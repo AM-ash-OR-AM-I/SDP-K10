@@ -133,3 +133,4 @@ results/*
 .vscode/*
 README2.md
 *.zip
+datasets/Kvasir-SEG

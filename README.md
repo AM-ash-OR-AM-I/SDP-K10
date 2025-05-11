@@ -45,7 +45,7 @@ Multi organ segmentation | [Synapse](https://drive.google.com/uc?export=download
 
 3) Run the below code to train the DAEFormer on the synapse dataset.
     ```bash
-    python train.py --root_path ./data/Synapse/train_npz --test_path ./data/Synapse/test_vol_h5 --batch_size 20 --eval_interval 20 --max_epochs 400 --module networks.DAEFormer.DAEFormer
+    python train.py --root_path ./data/Synapse/train_npz --test_path ./data/Synapse/test_vol_h5 --batch_size 20 --eval_interval 20 --max_epochs 400 --module networks.DAEFormer_new.DAEFormer
     ```
     **--root_path**     [Train data path]
 
