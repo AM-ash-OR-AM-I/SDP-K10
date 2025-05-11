@@ -9,7 +9,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import transforms as T
-from networks.DAEFormer_new import DAEFormer
+from networks.DAEFormer import DAEFormer as DAEFormer_orig
+from networks.DAEFormer_new import DAEFormer as DAEFormer_new
 from datasets.dataset_kvasir import KvasirSegDataset
 from tqdm import tqdm
 
@@ -91,6 +92,13 @@ def parse_args():
         default=1,
         help="Whether to use deterministic training (default: 1)",
     )
+    parser.add_argument(
+        "--model_version",
+        type=str,
+        default="new",
+        choices=["original", "new"],
+        help="DAEFormer model version to use (default: new)",
+    )
 
     return parser.parse_args()
 
@@ -155,7 +163,15 @@ def main():
     device = torch.device(
         args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu"
     )
-    model = DAEFormer(num_classes=args.num_classes).to(device)
+
+    # Select model version
+    if args.model_version == "original":
+        model = DAEFormer_orig(num_classes=args.num_classes).to(device)
+        logging.info("Using original DAEFormer implementation")
+    else:
+        model = DAEFormer_new(num_classes=args.num_classes).to(device)
+        logging.info("Using new DAEFormer implementation")
+
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
@@ -233,13 +249,16 @@ def main():
         # Save best model
         if epoch_loss < best_loss:
             best_loss = epoch_loss
-            best_model_path = os.path.join(args.save_dir, "best_model.pth")
+            best_model_path = os.path.join(
+                args.save_dir, f"best_model_{args.model_version}.pth"
+            )
             torch.save(
                 {
                     "epoch": epoch + 1,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "loss": epoch_loss,
+                    "model_version": args.model_version,
                 },
                 best_model_path,
             )
@@ -248,7 +267,7 @@ def main():
         # Save regular checkpoint
         if (epoch + 1) % args.save_interval == 0:
             checkpoint_path = os.path.join(
-                args.save_dir, f"daeformer_kvasir_epoch{epoch+1}.pth"
+                args.save_dir, f"daeformer_{args.model_version}_epoch{epoch+1}.pth"
             )
             torch.save(
                 {
@@ -256,6 +275,7 @@ def main():
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "loss": epoch_loss,
+                    "model_version": args.model_version,
                 },
                 checkpoint_path,
             )
