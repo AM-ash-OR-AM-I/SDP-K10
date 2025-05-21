@@ -7,6 +7,8 @@ from tqdm import tqdm
 import numpy as np
 from datasets.dataset_kvasir import KvasirSegDataset
 from networks.DAEFormer import DAEFormer
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, f1_score
+import matplotlib.pyplot as plt
 
 
 def parse_args():
@@ -67,6 +69,8 @@ def main():
     # Inference
     dice_scores = []
     iou_scores = []
+    all_preds = []
+    all_gts = []
     with torch.no_grad():
         for images, masks in tqdm(test_loader, desc="Testing"):
             images = images.to(device)
@@ -81,10 +85,27 @@ def main():
             iou = intersection / (union - intersection + 1e-8)
             dice_scores.extend(dice.cpu().numpy())
             iou_scores.extend(iou.cpu().numpy())
+            # For confusion matrix and F1
+            all_preds.append(preds.cpu().numpy().astype(np.uint8).flatten())
+            all_gts.append(masks.cpu().numpy().astype(np.uint8).flatten())
 
+    all_preds = np.concatenate(all_preds)
+    all_gts = np.concatenate(all_gts)
+
+    # F1 Score (same as Dice for binary)
+    f1 = f1_score(all_gts, all_preds)
     print(f"Mean Dice: {np.mean(dice_scores):.4f}")
     print(f"Mean IoU: {np.mean(iou_scores):.4f}")
+    print(f"F1 Score (pixel): {f1:.4f}")
 
+    # Confusion Matrix
+    cm = confusion_matrix(all_gts, all_preds)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Background", "Foreground"])
+    disp.plot(cmap=plt.cm.Blues)
+    plt.title("Pixel-wise Confusion Matrix")
+    plt.savefig("confusion_matrix.png", dpi=200, bbox_inches="tight")
+    plt.close()
+    print("Confusion matrix saved as confusion_matrix.png")
 
 if __name__ == "__main__":
     main()
