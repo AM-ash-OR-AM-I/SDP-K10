@@ -7,13 +7,11 @@ import sys
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets.dataset_synapse import Synapse_dataset
 from networks.DAEFormer import DAEFormer
-from trainer import trainer_synapse
 from utils import test_single_volume
 
 parser = argparse.ArgumentParser()
@@ -24,17 +22,38 @@ parser.add_argument(
     help="root dir for validation volume data",
 )  # for acdc volume_path=root_dir
 parser.add_argument("--dataset", type=str, default="Synapse", help="experiment_name")
-parser.add_argument("--num_classes", type=int, default=9, help="output channel of network")
-parser.add_argument("--list_dir", type=str, default="./lists/lists_Synapse", help="list dir")
+parser.add_argument(
+    "--num_classes", type=int, default=9, help="output channel of network"
+)
+parser.add_argument(
+    "--list_dir", type=str, default="./lists/lists_Synapse", help="list dir"
+)
 parser.add_argument("--output_dir", type=str, default="./model_out", help="output dir")
-parser.add_argument("--max_iterations", type=int, default=30000, help="maximum epoch number to train")
-parser.add_argument("--max_epochs", type=int, default=400, help="maximum epoch number to train")
+parser.add_argument(
+    "--max_iterations", type=int, default=30000, help="maximum epoch number to train"
+)
+parser.add_argument(
+    "--max_epochs", type=int, default=400, help="maximum epoch number to train"
+)
 parser.add_argument("--batch_size", type=int, default=24, help="batch_size per gpu")
-parser.add_argument("--img_size", type=int, default=224, help="input patch size of network input")
-parser.add_argument("--is_savenii", action="store_true", help="whether to save results during inference")
-parser.add_argument("--test_save_dir", type=str, default="../predictions", help="saving prediction as nii!")
-parser.add_argument("--deterministic", type=int, default=1, help="whether use deterministic training")
-parser.add_argument("--base_lr", type=float, default=0.05, help="segmentation network learning rate")
+parser.add_argument(
+    "--img_size", type=int, default=224, help="input patch size of network input"
+)
+parser.add_argument(
+    "--is_savenii", action="store_true", help="whether to save results during inference"
+)
+parser.add_argument(
+    "--test_save_dir",
+    type=str,
+    default="../predictions",
+    help="saving prediction as nii!",
+)
+parser.add_argument(
+    "--deterministic", type=int, default=1, help="whether use deterministic training"
+)
+parser.add_argument(
+    "--base_lr", type=float, default=0.05, help="segmentation network learning rate"
+)
 parser.add_argument("--seed", type=int, default=1234, help="random seed")
 # parser.add_argument('--cfg', type=str, required=True, metavar="FILE", help='path to config file', )
 parser.add_argument(
@@ -43,7 +62,9 @@ parser.add_argument(
     default=None,
     nargs="+",
 )
-parser.add_argument("--zip", action="store_true", help="use zipped dataset instead of folder dataset")
+parser.add_argument(
+    "--zip", action="store_true", help="use zipped dataset instead of folder dataset"
+)
 parser.add_argument(
     "--cache-mode",
     type=str,
@@ -54,9 +75,13 @@ parser.add_argument(
     "part: sharding the dataset into nonoverlapping pieces and only cache one piece",
 )
 parser.add_argument("--resume", help="resume from checkpoint")
-parser.add_argument("--accumulation-steps", type=int, help="gradient accumulation steps")
 parser.add_argument(
-    "--use-checkpoint", action="store_true", help="whether to use gradient checkpointing to save memory"
+    "--accumulation-steps", type=int, help="gradient accumulation steps"
+)
+parser.add_argument(
+    "--use-checkpoint",
+    action="store_true",
+    help="whether to use gradient checkpointing to save memory",
 )
 parser.add_argument(
     "--amp-opt-level",
@@ -76,14 +101,23 @@ if args.dataset == "Synapse":
 
 
 def inference(args, model, test_save_path=None):
-    db_test = args.Dataset(base_dir=args.volume_path, split="test_vol", img_size=args.img_size, list_dir=args.list_dir)
+    db_test = args.Dataset(
+        base_dir=args.volume_path,
+        split="test_vol",
+        img_size=args.img_size,
+        list_dir=args.list_dir,
+    )
     testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=1)
     logging.info("{} test iterations per epoch".format(len(testloader)))
     model.eval()
     metric_list = 0.0
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         h, w = sampled_batch["image"].size()[2:]
-        image, label, case_name = sampled_batch["image"], sampled_batch["label"], sampled_batch["case_name"][0]
+        image, label, case_name = (
+            sampled_batch["image"],
+            sampled_batch["label"],
+            sampled_batch["case_name"][0],
+        )
         metric_i = test_single_volume(
             image,
             label,
@@ -97,19 +131,31 @@ def inference(args, model, test_save_path=None):
         metric_list += np.array(metric_i)
         logging.info(
             "idx %d case %s mean_dice %f mean_hd95 %f"
-            % (i_batch, case_name, np.mean(metric_i, axis=0)[0], np.mean(metric_i, axis=0)[1])
+            % (
+                i_batch,
+                case_name,
+                np.mean(metric_i, axis=0)[0],
+                np.mean(metric_i, axis=0)[1],
+            )
         )
     metric_list = metric_list / len(db_test)
     for i in range(1, args.num_classes):
-        logging.info("Mean class %d mean_dice %f mean_hd95 %f" % (i, metric_list[i - 1][0], metric_list[i - 1][1]))
+        logging.info(
+            "Mean class %d mean_dice %f mean_hd95 %f"
+            % (i, metric_list[i - 1][0], metric_list[i - 1][1])
+        )
     performance = np.mean(metric_list, axis=0)[0]
     mean_hd95 = np.mean(metric_list, axis=0)[1]
-    logging.info("Testing performance in best val model: mean_dice : %f mean_hd95 : %f" % (performance, mean_hd95))
+    logging.info(
+        "Testing performance in best val model: mean_dice : %f mean_hd95 : %f"
+        % (performance, mean_hd95)
+    )
     return "Testing Finished!"
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    # Remove CUDA device setting since we're running on CPU
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     if not args.deterministic:
         cudnn.benchmark = True
         cudnn.deterministic = False
@@ -119,7 +165,8 @@ if __name__ == "__main__":
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
+    # Remove CUDA seeding since we're on CPU
+    # torch.cuda.manual_seed(args.seed)
 
     dataset_config = {
         "Synapse": {
@@ -132,12 +179,16 @@ if __name__ == "__main__":
     args.z_spacing = dataset_config[dataset_name]["z_spacing"]
     args.is_pretrain = True
 
-    net = DAEFormer(num_classes=args.num_classes).cuda(0)
+    # Initialize model on CPU instead of CUDA
+    net = DAEFormer(num_classes=args.num_classes)
 
     snapshot = os.path.join(args.output_dir, "best_model.pth")
     if not os.path.exists(snapshot):
-        snapshot = snapshot.replace("best_model", "transfilm_epoch_" + str(args.max_epochs - 1))
-    msg = net.load_state_dict(torch.load(snapshot))
+        snapshot = snapshot.replace(
+            "best_model", "transfilm_epoch_" + str(args.max_epochs - 1)
+        )
+    # Load model with CPU mapping
+    msg = net.load_state_dict(torch.load(snapshot, map_location=torch.device("cpu")))
     print("self trained swin unet", msg)
     snapshot_name = snapshot.split("/")[-1]
 
