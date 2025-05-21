@@ -1,7 +1,6 @@
 import argparse
 import os
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision import transforms as T
 from tqdm import tqdm
@@ -41,8 +40,8 @@ def main():
     )
 
     # Data paths
-    images_dir = os.path.join("datasets", "Kvasir-SEG", "images")
-    masks_dir = os.path.join("datasets", "Kvasir-SEG", "masks")
+    images_dir = os.path.join("Kvasir-SEG", "images")
+    masks_dir = os.path.join("Kvasir-SEG", "masks")
 
     # Dataset and DataLoader
     transform = T.Compose(
