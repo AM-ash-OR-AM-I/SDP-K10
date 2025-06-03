@@ -1,8 +1,7 @@
-torch>=1.7.0
-numpy>=1.19.2
-PyWavelets>=1.1.1
-einops>=0.3.0
-tensorboardX
+einops 
+# tensorboardX
 medpy
-matplotlib>=3.3.0
+imgaug
+numpy==1.23.5
+matplotlib
 tqdm

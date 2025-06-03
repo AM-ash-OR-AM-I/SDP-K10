@@ -189,7 +189,7 @@ if __name__ == "__main__":
         )
     # Load model with CPU mapping
     msg = net.load_state_dict(torch.load(snapshot, map_location=torch.device("cpu")))
-    print("self trained swin unet", msg)
+    # print("self trained swin unet", msg)
     snapshot_name = snapshot.split("/")[-1]
 
     log_folder = "./test_log/test_log_"

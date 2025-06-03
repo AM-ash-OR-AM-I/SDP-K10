@@ -1,115 +1,91 @@
 import torch
-import numpy as np
+import torch.nn as nn
+import torchvision.transforms as transforms
+from PIL import Image
 import matplotlib.pyplot as plt
+import numpy as np
 import pywt
-from networks.DAEFormer import WaveletAttention
+from networks.DAEFormer_new import WaveletAttention
 
 
-def plot_wavelet_coeffs(coeffs, title):
-    """Plot wavelet coefficients."""
-    # Get the number of levels
-    n_levels = len(coeffs) - 1
+def visualize_wavelet_decomposition(image_tensor, wavelet='db1', level=1, save_dir='wavelet_decomposition'):
+    """Visualize wavelet decomposition of an image"""
+    import os
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Convert tensor to numpy
+    image = image_tensor[0, 0].detach().cpu().numpy()
+    
+    # Perform wavelet decomposition
+    coeffs = pywt.wavedec2(image, wavelet, level=level)
+    
+    # Visualize approximation coefficients
+    plt.figure(figsize=(8, 8))
+    plt.imshow(coeffs[0], cmap='viridis')
+    plt.title('Approximation Coefficients')
+    plt.colorbar()
+    plt.savefig(f'{save_dir}/approximation.png')
+    plt.close()
+    
+    # Visualize detail coefficients for each level
+    for i in range(1, len(coeffs)):
+        plt.figure(figsize=(15, 5))
+        for j, (title, detail) in enumerate(zip(['Horizontal', 'Vertical', 'Diagonal'], coeffs[i])):
+            plt.subplot(1, 3, j+1)
+            plt.imshow(detail, cmap='viridis')
+            plt.title(f'{title} Details - Level {i}')
+            plt.colorbar()
+        plt.savefig(f'{save_dir}/details_level_{i}.png')
+        plt.close()
 
-    # Create a figure
-    fig = plt.figure(figsize=(12, 8))
-    plt.suptitle(title, fontsize=14)
 
-    # Plot approximation coefficients
-    ax = fig.add_subplot(n_levels + 1, 3, 1)
-    ax.imshow(coeffs[0], cmap="viridis")
-    ax.set_title("Approximation")
-    ax.axis("off")
-
-    # Plot detail coefficients
-    for level in range(n_levels):
-        for i, direction in enumerate(["Horizontal", "Vertical", "Diagonal"]):
-            ax = fig.add_subplot(n_levels + 1, 3, (level + 1) * 3 + i + 1)
-            ax.imshow(coeffs[level + 1][i], cmap="viridis")
-            ax.set_title(f"Level {level + 1} {direction}")
-            ax.axis("off")
-
-    plt.tight_layout()
-    return fig
-
-
-def visualize_attention_effects(input_tensor, wavelet_attn):
-    """Visualize the effects of wavelet attention on a single channel."""
-    # Get a single image and channel for visualization
-    image = input_tensor[0, 0].detach().cpu().numpy()
-
-    # Get wavelet coefficients of input
-    input_coeffs = pywt.wavedec2(image, wavelet_attn.wavelet, level=wavelet_attn.level)
-
-    # Apply attention
+def visualize_wavelet_attention(image_tensor, save_dir='wavelet_attention'):
+    """Visualize the wavelet attention mechanism"""
+    import os
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Initialize wavelet attention module
+    wavelet_attn = WaveletAttention(in_channels=1, wavelet='db1', level=1)
+    
+    # Process image through wavelet attention
     with torch.no_grad():
-        output = wavelet_attn(input_tensor)
-    output_image = output[0, 0].cpu().numpy()
-
-    # Get wavelet coefficients of output
-    output_coeffs = pywt.wavedec2(
-        output_image, wavelet_attn.wavelet, level=wavelet_attn.level
-    )
-
-    # Plot original and processed images
-    plt.figure(figsize=(10, 5))
-
-    plt.subplot(121)
-    plt.imshow(image, cmap="viridis")
-    plt.title("Original Image")
-    plt.colorbar()
-    plt.axis("off")
-
-    plt.subplot(122)
-    plt.imshow(output_image, cmap="viridis")
-    plt.title("After Wavelet Attention")
-    plt.colorbar()
-    plt.axis("off")
-
-    plt.tight_layout()
-    plt.show()
-
-    # Plot wavelet coefficients
-    plot_wavelet_coeffs(input_coeffs, "Input Wavelet Coefficients")
-    plt.show()
-
-    plot_wavelet_coeffs(output_coeffs, "Output Wavelet Coefficients")
-    plt.show()
-
-    # Plot attention weights
-    plt.figure(figsize=(10, 4))
-
-    plt.subplot(121)
-    plt.bar(["Alpha", "Beta"], [wavelet_attn.alpha.item(), wavelet_attn.beta.item()])
-    plt.title("Learned Attention Weights")
-
-    # Plot difference map
-    plt.subplot(122)
-    diff = output_image - image
-    plt.imshow(diff, cmap="RdBu")
-    plt.title("Difference Map")
-    plt.colorbar()
-    plt.axis("off")
-
-    plt.tight_layout()
-    plt.show()
+        # Visualize input
+        plt.figure(figsize=(8, 8))
+        plt.imshow(image_tensor[0, 0].detach().cpu().numpy(), cmap='viridis')
+        plt.title('Input Image')
+        plt.colorbar()
+        plt.savefig(f'{save_dir}/input.png')
+        plt.close()
+        
+        # Get attention output
+        attention_output = wavelet_attn(image_tensor)
+        
+        # Visualize attention output
+        plt.figure(figsize=(8, 8))
+        plt.imshow(attention_output[0, 0].detach().cpu().numpy(), cmap='viridis')
+        plt.title('Wavelet Attention Output')
+        plt.colorbar()
+        plt.savefig(f'{save_dir}/attention_output.png')
+        plt.close()
+        
+        # Visualize wavelet decomposition
+        visualize_wavelet_decomposition(image_tensor, save_dir=f'{save_dir}/decomposition')
 
 
-if __name__ == "__main__":
-    # Create sample input
-    batch_size = 1
-    channels = 1
-    height = 32
-    width = 32
+def main():
+    # Load and preprocess image
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
+    ])
+    
+    # Load sample image (replace with your image path)
+    image = Image.open('sample.jpg')
+    image_tensor = transform(image).unsqueeze(0)
+    
+    # Visualize wavelet attention
+    visualize_wavelet_attention(image_tensor)
 
-    # Create a test pattern
-    x = torch.zeros(batch_size, channels, height, width)
-    # Add some patterns for better visualization
-    for i in range(height):
-        for j in range(width):
-            x[0, 0, i, j] = np.sin(i / 4) + np.cos(j / 4)
 
-    # Initialize WaveletAttention
-    wavelet_attn = WaveletAttention(in_channels=channels, wavelet="db1", level=2)
-
-    # Visualize
-    visualize_attention_effects(x, wavelet_attn)
+if __name__ == '__main__':
+    main()
