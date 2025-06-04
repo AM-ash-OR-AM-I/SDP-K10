@@ -142,7 +142,9 @@ def visualize_attention_maps(
 def visualize_segmentation_with_gt(
     image_path, mask_path, model, save_dir="segmentation_results"
 ):
-    """Visualize segmentation results with ground truth comparison for a single image"""
+    """Visualize segmentation results with ground truth comparison for a single image
+    Returns: dice, iou
+    """
     os.makedirs(save_dir, exist_ok=True)
 
     # Load and preprocess image and mask
@@ -235,6 +237,8 @@ def visualize_segmentation_with_gt(
     print(f"Dice Score: {dice.item():.4f}")
     print(f"IoU Score: {iou.item():.4f}")
 
+    return dice.item(), iou.item()
+
 
 def main(images_dir, masks_dir, model_path, save_dir):
     # Define the transform
@@ -242,8 +246,8 @@ def main(images_dir, masks_dir, model_path, save_dir):
         [transforms.Resize((224, 224)), transforms.ToTensor()]
     )
 
-    # Get just the first image for detailed visualization
-    image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(".jpg")])[:1]
+    # Get first 30 images
+    image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(".jpg")])[:30]
 
     # Initialize model and load trained weights
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -270,7 +274,11 @@ def main(images_dir, masks_dir, model_path, save_dir):
 
     model.eval()
 
-    # Process single image for detailed visualization
+    # For summary
+    dice_scores = []
+    iou_scores = []
+    image_names = []
+
     for idx, image_file in enumerate(image_files):
         image_path = os.path.join(images_dir, image_file)
         print(f"\nProcessing {image_file} for detailed transformation visualization")
@@ -283,18 +291,47 @@ def main(images_dir, masks_dir, model_path, save_dir):
             print(f"Error processing image {image_file}: {e}")
             continue
 
+        # Use folder structure: <save_dir>/<image_basename>/attention_maps/ and .../segmentation_results/
+        image_base = os.path.splitext(image_file)[0]
+        parent_dir = os.path.join(save_dir, image_base)
+        attention_save_dir = os.path.join(parent_dir, "attention_maps")
+        segmentation_save_dir = os.path.join(parent_dir, "segmentation_results")
+
         visualize_attention_maps(
             model,
             image_tensor,
-            save_dir=os.path.join(save_dir, "attention_maps"),
+            save_dir=attention_save_dir,
         )
         # Also run the segmentation visualization for comparison
         mask_path = os.path.join(masks_dir, image_file)
-        visualize_segmentation_with_gt(
+        dice, iou = visualize_segmentation_with_gt(
             image_path,
             mask_path,
             model,
-            save_dir=os.path.join(save_dir, "segmentation_results"),
+            save_dir=segmentation_save_dir,
+        )
+        dice_scores.append(dice)
+        iou_scores.append(iou)
+        image_names.append(image_base)
+
+    # Plot summary bar graph
+    if len(image_names) > 0:
+        x = np.arange(len(image_names))
+        width = 0.35
+        plt.figure(figsize=(max(10, len(image_names) * 0.4), 6))
+        plt.bar(x - width / 2, dice_scores, width, label="Dice")
+        plt.bar(x + width / 2, iou_scores, width, label="IoU")
+        plt.xlabel("Image")
+        plt.ylabel("Score")
+        plt.title("Dice and IoU Scores for Each Image")
+        plt.xticks(x, image_names, rotation=90, fontsize=8)
+        plt.ylim(0, 1)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, "summary_metrics.png"))
+        plt.close()
+        print(
+            f"Summary metrics plot saved to {os.path.join(save_dir, 'summary_metrics.png')}"
         )
 
 
