@@ -1,3 +1,4 @@
+from cv2 import transform
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
@@ -33,14 +34,23 @@ def visualize_tensor(tensor, title, save_path=None):
     plt.close()
 
 
-def visualize_attention_maps(model, image_tensor, save_dir="attention_maps"):
-    """Visualize attention maps at different stages"""
+def visualize_attention_maps(
+    model, image_tensor, save_dir="all_visualizations/daeformer"
+):
+    """Visualize the complete transformation process of DAEFormer"""
     os.makedirs(save_dir, exist_ok=True)
 
     # 1. Initial Image
-    visualize_tensor(image_tensor, "Input Image", f"{save_dir}/1_input.png")
+    plt.figure(figsize=(8, 8))
+    if image_tensor.size(1) == 1:
+        plt.imshow(image_tensor[0, 0].detach().cpu().numpy(), cmap="gray")
+    else:
+        plt.imshow(image_tensor[0].permute(1, 2, 0).detach().cpu().numpy())
+    plt.title("1. Input Image")
+    plt.axis("off")
+    plt.savefig(f"{save_dir}/1_input.png")
+    plt.close()
 
-    # 2. Encoder Stages
     with torch.no_grad():
         # Get encoder outputs
         if image_tensor.size(1) == 1:
@@ -49,36 +59,79 @@ def visualize_attention_maps(model, image_tensor, save_dir="attention_maps"):
         # Get encoder outputs
         encoder_outputs = model.backbone(image_tensor)
 
-        # Visualize each encoder stage
+        # Visualize each encoder stage with more details
         for i, output in enumerate(encoder_outputs):
-            visualize_tensor(
-                output, f"Encoder Stage {i+1}", f"{save_dir}/2_encoder_stage_{i+1}.png"
+            # Get the shape information
+            b, c, h, w = output.shape
+            plt.figure(figsize=(8, 8))
+
+            # Take mean across channels for visualization
+            vis_output = output[0].mean(dim=0)
+            # Normalize for visualization
+            vis_output = (vis_output - vis_output.min()) / (
+                vis_output.max() - vis_output.min() + 1e-8
             )
+
+            plt.imshow(vis_output.detach().cpu().numpy(), cmap="viridis")
+            plt.title(f"2. Encoder Stage {i+1}\nShape: {c} channels, {h}x{w} spatial")
+            plt.colorbar(label="Activation Strength")
+            plt.axis("off")
+            plt.savefig(f"{save_dir}/2_encoder_stage_{i+1}.png")
+            plt.close()
 
         # 3. Decoder Stages
         b, c, _, _ = encoder_outputs[2].shape
 
         # Decoder Stage 1
         tmp_2 = model.decoder_2(encoder_outputs[2].permute(0, 2, 3, 1).view(b, -1, c))
-        visualize_tensor(
-            tmp_2.view(b, -1, 28, 28).permute(0, 3, 1, 2),
-            "Decoder Stage 1",
-            f"{save_dir}/3_decoder_stage_1.png",
+        decoder_1_output = tmp_2.view(b, -1, 28, 28).permute(0, 3, 1, 2)
+        plt.figure(figsize=(8, 8))
+        vis_output = decoder_1_output[0].mean(dim=0)
+        vis_output = (vis_output - vis_output.min()) / (
+            vis_output.max() - vis_output.min() + 1e-8
         )
+        plt.imshow(vis_output.detach().cpu().numpy(), cmap="viridis")
+        plt.title("3. Decoder Stage 1\nUpsampling from 14x14 to 28x28")
+        plt.colorbar(label="Activation Strength")
+        plt.axis("off")
+        plt.savefig(f"{save_dir}/3_decoder_stage_1.png")
+        plt.close()
 
         # Decoder Stage 2
         tmp_1 = model.decoder_1(tmp_2, encoder_outputs[1].permute(0, 2, 3, 1))
-        visualize_tensor(
-            tmp_1.view(b, -1, 56, 56).permute(0, 3, 1, 2),
-            "Decoder Stage 2",
-            f"{save_dir}/3_decoder_stage_2.png",
+        decoder_2_output = tmp_1.view(b, -1, 56, 56).permute(0, 3, 1, 2)
+        plt.figure(figsize=(8, 8))
+        vis_output = decoder_2_output[0].mean(dim=0)
+        vis_output = (vis_output - vis_output.min()) / (
+            vis_output.max() - vis_output.min() + 1e-8
         )
+        plt.imshow(vis_output.detach().cpu().numpy(), cmap="viridis")
+        plt.title("3. Decoder Stage 2\nUpsampling from 28x28 to 56x56")
+        plt.colorbar(label="Activation Strength")
+        plt.axis("off")
+        plt.savefig(f"{save_dir}/3_decoder_stage_2.png")
+        plt.close()
 
         # Decoder Stage 3 (Final Output)
         tmp_0 = model.decoder_0(tmp_1, encoder_outputs[0].permute(0, 2, 3, 1))
-        visualize_tensor(
-            tmp_0, "Final Segmentation Output", f"{save_dir}/4_final_output.png"
-        )
+        plt.figure(figsize=(8, 8))
+        # For final output, we want to see the actual segmentation
+        final_output = torch.sigmoid(
+            tmp_0[0, 0]
+        )  # Take first channel and apply sigmoid
+        plt.imshow(final_output.detach().cpu().numpy(), cmap="gray")
+        plt.title("4. Final Output\nSegmentation Mask (224x224)")
+        plt.colorbar(label="Probability")
+        plt.axis("off")
+        plt.savefig(f"{save_dir}/4_final_output.png")
+        plt.close()
+
+        print(f"Transformation visualizations saved to {save_dir}")
+        print("Visualization sequence:")
+        print("1. Input Image")
+        print("2. Encoder Stages (3 stages, progressively smaller spatial dimensions)")
+        print("3. Decoder Stages (2 stages, progressively larger spatial dimensions)")
+        print("4. Final Output (Segmentation mask)")
 
 
 def visualize_segmentation_with_gt(
@@ -178,19 +231,14 @@ def visualize_segmentation_with_gt(
     print(f"IoU Score: {iou.item():.4f}")
 
 
-def main():
-    # Directory paths
-    images_dir = "datasets/Kvasir-SEG/images"
-    masks_dir = "datasets/Kvasir-SEG/masks"
+def main(images_dir, masks_dir, model_path):
 
-    # Get the first 10 image filenames (assuming .jpg extension)
-    image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(".jpg")])[:10]
+    # Get just the first image for detailed visualization
+    image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(".jpg")])[:1]
 
     # Initialize model and load trained weights
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = DAEFormer(num_classes=1).to(device)
-
-    model_path = "model_out/kvasir_best_model.pth"
     if os.path.exists(model_path):
         print(f"Loading model weights from {model_path}")
         checkpoint = torch.load(model_path, map_location=device)
@@ -212,11 +260,14 @@ def main():
 
     model.eval()
 
-    # Visualize segmentation with ground truth for 10 images
+    # Process single image for detailed visualization
     for idx, image_file in enumerate(image_files):
         image_path = os.path.join(images_dir, image_file)
+        print(f"\nProcessing {image_file} for detailed transformation visualization")
+        image_tensor = transform(Image.open(image_path)).unsqueeze(0)
+        visualize_attention_maps(model, image_tensor)
+        # Also run the segmentation visualization for comparison
         mask_path = os.path.join(masks_dir, image_file)
-        print(f"\nProcessing {image_file} ({idx+1}/10)")
         visualize_segmentation_with_gt(
             image_path,
             mask_path,
@@ -226,4 +277,26 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--images_dir", type=str, required=False, default="datasets/Kvasir-SEG/images"
+    )
+    parser.add_argument(
+        "--masks_dir", type=str, required=False, default="datasets/Kvasir-SEG/masks"
+    )
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        required=False,
+        default="model_out/kvasir_best_model.pth",
+    )
+    parser.add_argument(
+        "--save_dir",
+        type=str,
+        required=False,
+        default="all_visualizations/daeformer",
+    )
+    args = parser.parse_args()
+    main(args.images_dir, args.masks_dir, args.model_path, args.save_dir)
