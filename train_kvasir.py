@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from torchvision import transforms as T
 from networks.DAEFormer import DAEFormer as DAEFormer_orig
@@ -125,6 +126,32 @@ def set_seed(seed, deterministic=True):
         torch.backends.cudnn.benchmark = True
 
 
+def plot_loss_graph(epoch_losses, epoch_avg_losses, save_path):
+    """Plot and save the epoch vs loss graph with both current and average losses."""
+    plt.figure(figsize=(10, 6))
+    plt.plot(
+        range(1, len(epoch_losses) + 1),
+        epoch_losses,
+        "b-",
+        label="Current Loss",
+        alpha=0.7,
+    )
+    plt.plot(
+        range(1, len(epoch_avg_losses) + 1),
+        epoch_avg_losses,
+        "r-",
+        label="Average Loss",
+        alpha=0.7,
+    )
+    plt.title("Training Loss vs Epochs")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(save_path)
+    plt.close()
+
+
 def main():
     args = parse_args()
 
@@ -182,6 +209,8 @@ def main():
     logging.info(f"Number of epochs: {args.num_epochs}")
 
     best_loss = float("inf")
+    epoch_losses = []  # List to store epoch losses for plotting
+    epoch_avg_losses = []  # List to store epoch average losses for plotting
     for epoch in range(args.num_epochs):
         model.train()
         running_loss = 0.0
@@ -237,13 +266,24 @@ def main():
                 logging.info(f"Backward pass time: {backward_time:.3f}s")
 
         epoch_loss = running_loss / len(dataset)
+        epoch_avg_loss = running_loss / ((batch_idx + 1) * args.batch_size)
+        epoch_losses.append(epoch_loss)  # Store the epoch loss
+        epoch_avg_losses.append(epoch_avg_loss)  # Store the epoch average loss
         epoch_time = time.time() - epoch_start_time
 
         # Log epoch statistics
         logging.info(
             f"Epoch [{epoch+1}/{args.num_epochs}] "
             f"Loss: {epoch_loss:.4f} "
+            f"Avg Loss: {epoch_avg_loss:.4f} "
             f"Time: {epoch_time:.2f}s"
+        )
+
+        # Plot and save loss graph after each epoch
+        plot_loss_graph(
+            epoch_losses,
+            epoch_avg_losses,
+            os.path.join(args.save_dir, f"loss_graph_{args.model_version}.png"),
         )
 
         # Save best model

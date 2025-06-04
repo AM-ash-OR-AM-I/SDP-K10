@@ -1,10 +1,9 @@
 import argparse
-import logging
 import os
 import random
 import warnings
 from pydoc import locate
-
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -27,22 +26,41 @@ parser.add_argument(
     help="root dir for test data",
 )
 parser.add_argument("--dataset", type=str, default="Synapse", help="experiment_name")
-parser.add_argument("--list_dir", type=str, default="./lists/lists_Synapse", help="list dir")
-parser.add_argument("--num_classes", type=int, default=9, help="output channel of network")
+parser.add_argument(
+    "--list_dir", type=str, default="./lists/lists_Synapse", help="list dir"
+)
+parser.add_argument(
+    "--num_classes", type=int, default=9, help="output channel of network"
+)
 parser.add_argument("--output_dir", type=str, default="./model_out", help="output dir")
-parser.add_argument("--max_iterations", type=int, default=90000, help="maximum epoch number to train")
-parser.add_argument("--max_epochs", type=int, default=400, help="maximum epoch number to train")
+parser.add_argument(
+    "--max_iterations", type=int, default=90000, help="maximum epoch number to train"
+)
+parser.add_argument(
+    "--max_epochs", type=int, default=400, help="maximum epoch number to train"
+)
 parser.add_argument("--batch_size", type=int, default=24, help="batch_size per gpu")
 parser.add_argument("--num_workers", type=int, default=4, help="num_workers")
 parser.add_argument("--eval_interval", type=int, default=20, help="eval_interval")
 parser.add_argument("--model_name", type=str, default="synapse", help="model_name")
 parser.add_argument("--n_gpu", type=int, default=1, help="total gpu")
-parser.add_argument("--deterministic", type=int, default=1, help="whether to use deterministic training")
-parser.add_argument("--base_lr", type=float, default=0.05, help="segmentation network base learning rate")
-parser.add_argument("--img_size", type=int, default=224, help="input patch size of network input")
+parser.add_argument(
+    "--deterministic", type=int, default=1, help="whether to use deterministic training"
+)
+parser.add_argument(
+    "--base_lr",
+    type=float,
+    default=0.05,
+    help="segmentation network base learning rate",
+)
+parser.add_argument(
+    "--img_size", type=int, default=224, help="input patch size of network input"
+)
 parser.add_argument("--z_spacing", type=int, default=1, help="z_spacing")
 parser.add_argument("--seed", type=int, default=1234, help="random seed")
-parser.add_argument("--zip", action="store_true", help="use zipped dataset instead of folder dataset")
+parser.add_argument(
+    "--zip", action="store_true", help="use zipped dataset instead of folder dataset"
+)
 parser.add_argument(
     "--cache-mode",
     type=str,
@@ -53,9 +71,13 @@ parser.add_argument(
     "part: sharding the dataset into nonoverlapping pieces and only cache one piece",
 )
 parser.add_argument("--resume", help="resume from checkpoint")
-parser.add_argument("--accumulation-steps", type=int, help="gradient accumulation steps")
 parser.add_argument(
-    "--use-checkpoint", action="store_true", help="whether to use gradient checkpointing to save memory"
+    "--accumulation-steps", type=int, help="gradient accumulation steps"
+)
+parser.add_argument(
+    "--use-checkpoint",
+    action="store_true",
+    help="whether to use gradient checkpointing to save memory",
 )
 parser.add_argument(
     "--amp-opt-level",
@@ -68,10 +90,37 @@ parser.add_argument("--tag", help="tag of experiment")
 parser.add_argument("--eval", action="store_true", help="Perform evaluation only")
 parser.add_argument("--throughput", action="store_true", help="Test throughput only")
 parser.add_argument(
-    "--module", help="The module that you want to load as the network, e.g. networks.DAEFormer.DAEFormer"
+    "--module",
+    help="The module that you want to load as the network, e.g. networks.DAEFormer.DAEFormer",
 )
 
 args = parser.parse_args()
+
+
+def plot_loss_graph(epoch_losses, epoch_avg_losses, save_path):
+    """Plot and save the epoch vs loss graph with both current and average losses."""
+    plt.figure(figsize=(10, 6))
+    plt.plot(
+        range(1, len(epoch_losses) + 1),
+        epoch_losses,
+        "b-",
+        label="Current Loss",
+        alpha=0.7,
+    )
+    plt.plot(
+        range(1, len(epoch_avg_losses) + 1),
+        epoch_avg_losses,
+        "r-",
+        label="Average Loss",
+        alpha=0.7,
+    )
+    plt.title("Training Loss vs Epochs")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(save_path)
+    plt.close()
 
 
 if __name__ == "__main__":
@@ -120,7 +169,23 @@ if __name__ == "__main__":
 
     net = transformer(num_classes=args.num_classes).cuda(0)
 
+    # Create a callback to collect losses
+    epoch_losses = []
+    epoch_avg_losses = []
+
+    def loss_callback(epoch, loss, avg_loss):
+        epoch_losses.append(loss)
+        epoch_avg_losses.append(avg_loss)
+        # Plot and save loss graph after each epoch
+        plot_loss_graph(
+            epoch_losses,
+            epoch_avg_losses,
+            os.path.join(args.output_dir, "loss_graph.png"),
+        )
+
     trainer = {
         "Synapse": trainer_synapse,
     }
-    trainer[dataset_name](args, net, args.output_dir)
+
+    # Pass the callback to the trainer
+    trainer[dataset_name](args, net, args.output_dir, loss_callback=loss_callback)
