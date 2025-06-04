@@ -1,4 +1,3 @@
-from cv2 import transform
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
@@ -8,8 +7,10 @@ from networks.DAEFormer import DAEFormer
 import os
 
 
-def visualize_tensor(tensor, title, save_path=None):
-    """Visualize a tensor as an image"""
+def visualize_tensor(
+    tensor, title, save_path=None, cmap="viridis", colorbar_label=None
+):
+    """Visualize a tensor as an image with enhanced visualization options"""
     # Convert tensor to numpy array
     if tensor.dim() == 4:  # [B, C, H, W]
         tensor = tensor[0]  # Take first image in batch
@@ -26,9 +27,13 @@ def visualize_tensor(tensor, title, save_path=None):
     tensor = (tensor - tensor.min()) / (tensor.max() - tensor.min() + 1e-8)
 
     plt.figure(figsize=(8, 8))
-    plt.imshow(tensor.detach().cpu().numpy(), cmap="viridis")
+    im = plt.imshow(tensor.detach().cpu().numpy(), cmap=cmap)
     plt.title(title)
-    plt.colorbar()
+    if colorbar_label:
+        plt.colorbar(im, label=colorbar_label)
+    else:
+        plt.colorbar(im)
+    plt.axis("off")
     if save_path:
         plt.savefig(save_path)
     plt.close()
@@ -41,15 +46,12 @@ def visualize_attention_maps(
     os.makedirs(save_dir, exist_ok=True)
 
     # 1. Initial Image
-    plt.figure(figsize=(8, 8))
-    if image_tensor.size(1) == 1:
-        plt.imshow(image_tensor[0, 0].detach().cpu().numpy(), cmap="gray")
-    else:
-        plt.imshow(image_tensor[0].permute(1, 2, 0).detach().cpu().numpy())
-    plt.title("1. Input Image")
-    plt.axis("off")
-    plt.savefig(f"{save_dir}/1_input.png")
-    plt.close()
+    visualize_tensor(
+        image_tensor,
+        "1. Input Image",
+        f"{save_dir}/1_input.png",
+        cmap="gray" if image_tensor.size(1) == 1 else None,
+    )
 
     with torch.no_grad():
         # Get encoder outputs
@@ -61,23 +63,14 @@ def visualize_attention_maps(
 
         # Visualize each encoder stage with more details
         for i, output in enumerate(encoder_outputs):
-            # Get the shape information
             b, c, h, w = output.shape
-            plt.figure(figsize=(8, 8))
-
-            # Take mean across channels for visualization
-            vis_output = output[0].mean(dim=0)
-            # Normalize for visualization
-            vis_output = (vis_output - vis_output.min()) / (
-                vis_output.max() - vis_output.min() + 1e-8
+            visualize_tensor(
+                output,
+                f"2. Encoder Stage {i+1}\nShape: {c} channels, {h}x{w} spatial",
+                f"{save_dir}/2_encoder_stage_{i+1}.png",
+                cmap="viridis",
+                colorbar_label="Activation Strength",
             )
-
-            plt.imshow(vis_output.detach().cpu().numpy(), cmap="viridis")
-            plt.title(f"2. Encoder Stage {i+1}\nShape: {c} channels, {h}x{w} spatial")
-            plt.colorbar(label="Activation Strength")
-            plt.axis("off")
-            plt.savefig(f"{save_dir}/2_encoder_stage_{i+1}.png")
-            plt.close()
 
         # 3. Decoder Stages
         b, c, _, _ = encoder_outputs[2].shape
@@ -85,53 +78,65 @@ def visualize_attention_maps(
         # Decoder Stage 1
         tmp_2 = model.decoder_2(encoder_outputs[2].permute(0, 2, 3, 1).view(b, -1, c))
         decoder_1_output = tmp_2.view(b, -1, 28, 28).permute(0, 3, 1, 2)
-        plt.figure(figsize=(8, 8))
-        vis_output = decoder_1_output[0].mean(dim=0)
-        vis_output = (vis_output - vis_output.min()) / (
-            vis_output.max() - vis_output.min() + 1e-8
+        visualize_tensor(
+            decoder_1_output,
+            "3. Decoder Stage 1\nUpsampling from 14x14 to 28x28",
+            f"{save_dir}/3_decoder_stage_1.png",
+            cmap="viridis",
+            colorbar_label="Activation Strength",
         )
-        plt.imshow(vis_output.detach().cpu().numpy(), cmap="viridis")
-        plt.title("3. Decoder Stage 1\nUpsampling from 14x14 to 28x28")
-        plt.colorbar(label="Activation Strength")
-        plt.axis("off")
-        plt.savefig(f"{save_dir}/3_decoder_stage_1.png")
-        plt.close()
 
         # Decoder Stage 2
         tmp_1 = model.decoder_1(tmp_2, encoder_outputs[1].permute(0, 2, 3, 1))
         decoder_2_output = tmp_1.view(b, -1, 56, 56).permute(0, 3, 1, 2)
-        plt.figure(figsize=(8, 8))
-        vis_output = decoder_2_output[0].mean(dim=0)
-        vis_output = (vis_output - vis_output.min()) / (
-            vis_output.max() - vis_output.min() + 1e-8
+        visualize_tensor(
+            decoder_2_output,
+            "3. Decoder Stage 2\nUpsampling from 28x28 to 56x56",
+            f"{save_dir}/3_decoder_stage_2.png",
+            cmap="viridis",
+            colorbar_label="Activation Strength",
         )
-        plt.imshow(vis_output.detach().cpu().numpy(), cmap="viridis")
-        plt.title("3. Decoder Stage 2\nUpsampling from 28x28 to 56x56")
-        plt.colorbar(label="Activation Strength")
-        plt.axis("off")
-        plt.savefig(f"{save_dir}/3_decoder_stage_2.png")
-        plt.close()
 
         # Decoder Stage 3 (Final Output)
         tmp_0 = model.decoder_0(tmp_1, encoder_outputs[0].permute(0, 2, 3, 1))
-        plt.figure(figsize=(8, 8))
-        # For final output, we want to see the actual segmentation
-        final_output = torch.sigmoid(
-            tmp_0[0, 0]
-        )  # Take first channel and apply sigmoid
-        plt.imshow(final_output.detach().cpu().numpy(), cmap="gray")
-        plt.title("4. Final Output\nSegmentation Mask (224x224)")
-        plt.colorbar(label="Probability")
-        plt.axis("off")
-        plt.savefig(f"{save_dir}/4_final_output.png")
-        plt.close()
+
+        # Show raw decoder output (before sigmoid)
+        visualize_tensor(
+            tmp_0[0:1, 0:1],  # Take first channel
+            "4. Decoder Stage 3 (Raw Output)\nBefore Sigmoid Activation",
+            f"{save_dir}/4_decoder_stage_3_raw.png",
+            cmap="viridis",
+            colorbar_label="Raw Activation",
+        )
+
+        # Show final segmentation mask (after sigmoid)
+        final_output = torch.sigmoid(tmp_0[0:1, 0:1])
+        visualize_tensor(
+            final_output,
+            "4. Final Output\nSegmentation Mask (After Sigmoid)",
+            f"{save_dir}/4_final_output.png",
+            cmap="gray",
+            colorbar_label="Probability",
+        )
+
+        # Show final binary mask (thresholded at 0.5)
+        binary_mask = (final_output > 0.5).float()
+        visualize_tensor(
+            binary_mask,
+            "5. Final Binary Mask\nThresholded at 0.5",
+            f"{save_dir}/5_final_binary_mask.png",
+            cmap="gray",
+            colorbar_label="Mask (0=bg, 1=fg)",
+        )
 
         print(f"Transformation visualizations saved to {save_dir}")
         print("Visualization sequence:")
         print("1. Input Image")
         print("2. Encoder Stages (3 stages, progressively smaller spatial dimensions)")
         print("3. Decoder Stages (2 stages, progressively larger spatial dimensions)")
-        print("4. Final Output (Segmentation mask)")
+        print("4. Decoder Stage 3 (Raw output before sigmoid)")
+        print("4. Final Output (Segmentation mask after sigmoid)")
+        print("5. Final Binary Mask (Thresholded at 0.5)")
 
 
 def visualize_segmentation_with_gt(
@@ -231,7 +236,11 @@ def visualize_segmentation_with_gt(
     print(f"IoU Score: {iou.item():.4f}")
 
 
-def main(images_dir, masks_dir, model_path):
+def main(images_dir, masks_dir, model_path, save_dir):
+    # Define the transform
+    transform = transforms.Compose(
+        [transforms.Resize((224, 224)), transforms.ToTensor()]
+    )
 
     # Get just the first image for detailed visualization
     image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(".jpg")])[:1]
@@ -239,6 +248,7 @@ def main(images_dir, masks_dir, model_path):
     # Initialize model and load trained weights
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = DAEFormer(num_classes=1).to(device)
+
     if os.path.exists(model_path):
         print(f"Loading model weights from {model_path}")
         checkpoint = torch.load(model_path, map_location=device)
@@ -264,15 +274,27 @@ def main(images_dir, masks_dir, model_path):
     for idx, image_file in enumerate(image_files):
         image_path = os.path.join(images_dir, image_file)
         print(f"\nProcessing {image_file} for detailed transformation visualization")
-        image_tensor = transform(Image.open(image_path)).unsqueeze(0)
-        visualize_attention_maps(model, image_tensor)
+
+        # Load and transform image
+        try:
+            image = Image.open(image_path).convert("RGB")  # Ensure RGB format
+            image_tensor = transform(image).unsqueeze(0)
+        except Exception as e:
+            print(f"Error processing image {image_file}: {e}")
+            continue
+
+        visualize_attention_maps(
+            model,
+            image_tensor,
+            save_dir=os.path.join(save_dir, "attention_maps"),
+        )
         # Also run the segmentation visualization for comparison
         mask_path = os.path.join(masks_dir, image_file)
         visualize_segmentation_with_gt(
             image_path,
             mask_path,
             model,
-            save_dir=f"segmentation_results/{os.path.splitext(image_file)[0]}",
+            save_dir=os.path.join(save_dir, "segmentation_results"),
         )
 
 
