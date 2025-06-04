@@ -129,7 +129,7 @@ def visualize_segmentation_with_gt(
     print("Union:", union.item())
 
     # Create visualization
-    plt.figure(figsize=(15, 5))
+    plt.figure(figsize=(15, 6))
 
     # Input image
     plt.subplot(131)
@@ -179,32 +179,26 @@ def visualize_segmentation_with_gt(
 
 
 def main():
-    # Load and preprocess image
-    transform = transforms.Compose(
-        [transforms.Resize((224, 224)), transforms.ToTensor()]
-    )
+    # Directory paths
+    images_dir = "datasets/Kvasir-SEG/images"
+    masks_dir = "datasets/Kvasir-SEG/masks"
 
-    # Load sample image and its mask
-    image_path = "datasets/Kvasir-SEG/images/cju0qkwl35piu0993l0dewei2.jpg"
-    mask_path = "datasets/Kvasir-SEG/masks/cju0qkwl35piu0993l0dewei2.jpg"
+    # Get the first 10 image filenames (assuming .jpg extension)
+    image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(".jpg")])[:10]
 
     # Initialize model and load trained weights
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = DAEFormer(num_classes=9).to(device)  # Use 9 classes to match trained model
+    model = DAEFormer(num_classes=1).to(device)
 
-    # Load trained weights
-    model_path = "model_out/best_model.pth"
+    model_path = "model_out/kvasir_best_model.pth"
     if os.path.exists(model_path):
         print(f"Loading model weights from {model_path}")
         checkpoint = torch.load(model_path, map_location=device)
-
-        # Handle both direct state dict and dictionary-wrapped state dict
         state_dict = (
             checkpoint
             if isinstance(checkpoint, dict) and "model_state_dict" not in checkpoint
             else checkpoint.get("model_state_dict", checkpoint)
         )
-
         try:
             model.load_state_dict(state_dict)
             print("Successfully loaded model weights")
@@ -218,12 +212,17 @@ def main():
 
     model.eval()
 
-    # Visualize segmentation with ground truth
-    visualize_segmentation_with_gt(image_path, mask_path, model)
-
-    # Also run the original attention visualization
-    image_tensor = transform(Image.open(image_path)).unsqueeze(0)
-    visualize_attention_maps(model, image_tensor)
+    # Visualize segmentation with ground truth for 10 images
+    for idx, image_file in enumerate(image_files):
+        image_path = os.path.join(images_dir, image_file)
+        mask_path = os.path.join(masks_dir, image_file)
+        print(f"\nProcessing {image_file} ({idx+1}/10)")
+        visualize_segmentation_with_gt(
+            image_path,
+            mask_path,
+            model,
+            save_dir=f"segmentation_results/{os.path.splitext(image_file)[0]}",
+        )
 
 
 if __name__ == "__main__":
