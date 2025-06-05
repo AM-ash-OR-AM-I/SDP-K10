@@ -3,7 +3,7 @@ import torch.nn as nn
 from einops import rearrange
 from einops.layers.torch import Rearrange
 from torch.nn import functional as F
-from pytorch_wavelet import DWTForward, DWTInverse
+from pytorch_wavelets import DWTForward, DWTInverse
 
 
 from networks.segformer import *
