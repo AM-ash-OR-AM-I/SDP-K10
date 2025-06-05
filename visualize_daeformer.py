@@ -77,7 +77,7 @@ def visualize_attention_maps(
 
         # Decoder Stage 1
         tmp_2 = model.decoder_2(encoder_outputs[2].permute(0, 2, 3, 1).view(b, -1, c))
-        decoder_1_output = tmp_2.view(b, -1, 28, 28).permute(0, 3, 1, 2)
+        decoder_1_output = tmp_2.view(b, 28, 28, -1).permute(0, 3, 1, 2)
         visualize_tensor(
             decoder_1_output,
             "3. Decoder Stage 1\nUpsampling from 14x14 to 28x28",
@@ -88,7 +88,7 @@ def visualize_attention_maps(
 
         # Decoder Stage 2
         tmp_1 = model.decoder_1(tmp_2, encoder_outputs[1].permute(0, 2, 3, 1))
-        decoder_2_output = tmp_1.view(b, -1, 56, 56).permute(0, 3, 1, 2)
+        decoder_2_output = tmp_1.view(b, 56, 56, -1).permute(0, 3, 1, 2)
         visualize_tensor(
             decoder_2_output,
             "3. Decoder Stage 2\nUpsampling from 28x28 to 56x56",
@@ -139,8 +139,30 @@ def visualize_attention_maps(
         print("5. Final Binary Mask (Thresholded at 0.5)")
 
 
+def multiclass_dice(pred, target, num_classes):
+    dice = []
+    for c in range(num_classes):
+        pred_c = (pred == c).float()
+        target_c = (target == c).float()
+        intersection = (pred_c * target_c).sum()
+        union = pred_c.sum() + target_c.sum()
+        dice.append((2.0 * intersection) / (union + 1e-8))
+    return float(torch.mean(torch.tensor(dice)))
+
+
+def multiclass_iou(pred, target, num_classes):
+    ious = []
+    for c in range(num_classes):
+        pred_c = (pred == c).float()
+        target_c = (target == c).float()
+        intersection = (pred_c * target_c).sum()
+        union = pred_c.sum() + target_c.sum() - intersection
+        ious.append(intersection / (union + 1e-8))
+    return float(torch.mean(torch.tensor(ious)))
+
+
 def visualize_segmentation_with_gt(
-    image_path, mask_path, model, save_dir="segmentation_results"
+    image_path, mask_path, model, save_dir="segmentation_results", num_classes=1
 ):
     """Visualize segmentation results with ground truth comparison for a single image
     Returns: dice, iou
@@ -160,53 +182,70 @@ def visualize_segmentation_with_gt(
     image_tensor = transform(image).unsqueeze(0)
     mask_tensor = transform(mask).unsqueeze(0)
 
-    # Ensure mask is binary (0 or 1)
-    mask_bin = (mask_tensor > 0.5).float()
-
     # Get model prediction
     model.eval()
     with torch.no_grad():
         output = model(image_tensor)
-        # For multi-class model, take the first channel as binary prediction
-        if output.size(1) > 1:
-            output = output[:, 0:1]  # Take first channel
-        output = torch.sigmoid(output)
-        pred_bin = (output > 0.5).float()
+        if num_classes > 1:
+            # Multi-class: Synapse
+            output = torch.softmax(output, dim=1)
+            pred_bin = output.argmax(dim=1, keepdim=True)
+            mask_bin = mask_tensor.long()  # Use integer labels as is
+        else:
+            # Binary: Kvasir
+            output = torch.sigmoid(output)
+            pred_bin = (output > 0.5).float()
+            mask_bin = (mask_tensor > 0.5).float()
 
-    # Only consider the foreground (mask == 1 or pred == 1)
-    mask_fg = mask_bin[0, 0]
-    pred_fg = pred_bin[0, 0]
-
-    intersection = (pred_fg * mask_fg).sum()
-    union = pred_fg.sum() + mask_fg.sum() - intersection
-    dice = (2.0 * intersection) / (pred_fg.sum() + mask_fg.sum() + 1e-8)
-    iou = intersection / (union + 1e-8)
+    # Only consider the foreground (mask == 1 or pred == 1) for binary
+    if num_classes > 1:
+        mask_fg = mask_bin[0, 0]
+        pred_fg = pred_bin[0, 0]
+        dice = multiclass_dice(pred_fg, mask_fg, num_classes)
+        iou = multiclass_iou(pred_fg, mask_fg, num_classes)
+    else:
+        mask_fg = mask_bin[0, 0]
+        pred_fg = pred_bin[0, 0]
+        intersection = (pred_fg * mask_fg).sum()
+        union = pred_fg.sum() + mask_fg.sum() - intersection
+        dice = (2.0 * intersection) / (pred_fg.sum() + mask_fg.sum() + 1e-8)
+        iou = intersection / (union + 1e-8)
 
     # Debug prints
     print("Mask sum (foreground pixels):", mask_fg.sum().item())
     print("Prediction sum (foreground pixels):", pred_fg.sum().item())
-    print("Intersection:", intersection.item())
-    print("Union:", union.item())
+    print("Dice Score:", dice)
+    print("IoU Score:", iou)
 
     # Create visualization
     plt.figure(figsize=(15, 6))
 
     # Input image
     plt.subplot(131)
-    plt.imshow(image_tensor[0].permute(1, 2, 0).cpu().numpy())
+    plt.imshow(
+        image_tensor[0].permute(1, 2, 0).cpu().numpy(),
+        cmap=None if num_classes == 1 else "gray",
+    )
     plt.title("Input Image")
     plt.axis("off")
 
     # Ground truth mask
     plt.subplot(132)
-    plt.imshow(mask_fg.cpu().numpy(), cmap="gray")
+    if num_classes > 1:
+        plt.imshow(mask_fg.cpu().numpy(), cmap="tab10", vmin=0, vmax=num_classes - 1)
+    else:
+        plt.imshow(mask_fg.cpu().numpy(), cmap="gray")
     plt.title("Ground Truth Mask")
     plt.axis("off")
 
     # Model prediction
     plt.subplot(133)
-    plt.imshow(pred_fg.cpu().numpy(), cmap="gray")
-    plt.title(f"Model Prediction\nDice: {dice.item():.3f}, IoU: {iou.item():.3f}")
+    if num_classes > 1:
+        plt.imshow(pred_fg.cpu().numpy(), cmap="tab10", vmin=0, vmax=num_classes - 1)
+        plt.title(f"Model Prediction\nMean Dice: {dice:.3f}, Mean IoU: {iou:.3f}")
+    else:
+        plt.imshow(pred_fg.cpu().numpy(), cmap="gray")
+        plt.title(f"Model Prediction\nDice: {dice.item():.3f}, IoU: {iou.item():.3f}")
     plt.axis("off")
 
     plt.tight_layout()
@@ -215,29 +254,38 @@ def visualize_segmentation_with_gt(
 
     # Create overlay visualization
     plt.figure(figsize=(10, 10))
-
-    # Convert tensors to numpy arrays
-    pred_np = pred_fg.cpu().numpy()
-    gt_np = mask_fg.cpu().numpy()
-
-    # Create RGB visualization
-    overlay = np.zeros((224, 224, 3))
-    overlay[..., 0] = gt_np  # Red channel for ground truth
-    overlay[..., 1] = pred_np  # Green channel for prediction
-    overlay[..., 2] = 0  # Blue channel empty
-
-    plt.imshow(image_tensor[0].permute(1, 2, 0).cpu().numpy())
-    plt.imshow(overlay, alpha=0.5)
-    plt.title("Overlay: Red=Ground Truth, Green=Prediction\nYellow=Overlap")
-    plt.axis("off")
-    plt.savefig(f"{save_dir}/segmentation_overlay.png")
+    if num_classes > 1:
+        # For multi-class, overlay not as meaningful, but show prediction vs. GT
+        plt.subplot(121)
+        plt.imshow(mask_fg.cpu().numpy(), cmap="tab10", vmin=0, vmax=num_classes - 1)
+        plt.title("Ground Truth Mask")
+        plt.axis("off")
+        plt.subplot(122)
+        plt.imshow(pred_fg.cpu().numpy(), cmap="tab10", vmin=0, vmax=num_classes - 1)
+        plt.title("Model Prediction")
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig(f"{save_dir}/segmentation_overlay.png")
+    else:
+        # Convert tensors to numpy arrays
+        pred_np = pred_fg.cpu().numpy()
+        gt_np = mask_fg.cpu().numpy()
+        overlay = np.zeros((224, 224, 3))
+        overlay[..., 0] = gt_np  # Red channel for ground truth
+        overlay[..., 1] = pred_np  # Green channel for prediction
+        overlay[..., 2] = 0  # Blue channel empty
+        plt.imshow(image_tensor[0].permute(1, 2, 0).cpu().numpy())
+        plt.imshow(overlay, alpha=0.5)
+        plt.title("Overlay: Red=Ground Truth, Green=Prediction\nYellow=Overlap")
+        plt.axis("off")
+        plt.savefig(f"{save_dir}/segmentation_overlay.png")
     plt.close()
 
     print(f"Segmentation visualizations saved to {save_dir}")
-    print(f"Dice Score: {dice.item():.4f}")
-    print(f"IoU Score: {iou.item():.4f}")
+    print(f"Dice Score: {dice:.4f}")
+    print(f"IoU Score: {iou:.4f}")
 
-    return dice.item(), iou.item()
+    return dice, iou
 
 
 def main(images_dir, masks_dir, model_path, save_dir):
@@ -247,11 +295,17 @@ def main(images_dir, masks_dir, model_path, save_dir):
     )
 
     # Get first 30 images
-    image_files = sorted([f for f in os.listdir(images_dir) if f.endswith(".jpg")])[:30]
+    image_files = sorted(
+        [f for f in os.listdir(images_dir) if f.endswith(".jpg") or f.endswith(".png")]
+    )[:30]
 
     # Initialize model and load trained weights
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = DAEFormer(num_classes=1).to(device)
+    if "synapse" in model_path.lower():
+        num_classes = 9
+    else:
+        num_classes = 1
+    model = DAEFormer(num_classes=num_classes).to(device)
 
     if os.path.exists(model_path):
         print(f"Loading model weights from {model_path}")
@@ -309,6 +363,7 @@ def main(images_dir, masks_dir, model_path, save_dir):
             mask_path,
             model,
             save_dir=segmentation_save_dir,
+            num_classes=num_classes,
         )
         dice_scores.append(dice)
         iou_scores.append(iou)

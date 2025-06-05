@@ -136,3 +136,4 @@ README2.md
 datasets/Kvasir-SEG
 temp/
 *.pth
+datasets/Synapse
