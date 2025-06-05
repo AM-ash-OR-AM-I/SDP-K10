@@ -169,23 +169,7 @@ if __name__ == "__main__":
 
     net = transformer(num_classes=args.num_classes).cuda(0)
 
-    # Create a callback to collect losses
-    epoch_losses = []
-    epoch_avg_losses = []
-
-    def loss_callback(epoch, loss, avg_loss):
-        epoch_losses.append(loss)
-        epoch_avg_losses.append(avg_loss)
-        # Plot and save loss graph after each epoch
-        plot_loss_graph(
-            epoch_losses,
-            epoch_avg_losses,
-            os.path.join(args.output_dir, "loss_graph.png"),
-        )
-
     trainer = {
         "Synapse": trainer_synapse,
     }
-
-    # Pass the callback to the trainer
-    trainer[dataset_name](args, net, args.output_dir, loss_callback=loss_callback)
+    trainer[dataset_name](args, net, args.output_dir)
