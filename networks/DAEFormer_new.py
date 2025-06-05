@@ -3,6 +3,8 @@ import torch.nn as nn
 from einops import rearrange
 from einops.layers.torch import Rearrange
 from torch.nn import functional as F
+from pytorch_wavelets import DWTForward, DWTInverse
+
 
 from networks.segformer import *
 
@@ -207,65 +209,51 @@ class ChannelAttention(nn.Module):
         return x
 
 
-class FrequencyWaveletAttention(nn.Module):
-    def __init__(self, in_channels):
+class WaveletAttention(nn.Module):
+    def __init__(self, in_channels, wave="db1", level=1):
         super().__init__()
         self.in_channels = in_channels
+        self.level = level
+        self.wave = wave
 
-        # Frequency band processing
-        self.low_freq = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 1),
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(inplace=True),
-        )
+        # Batched, GPU-friendly DWT/IWT
+        self.dwt = DWTForward(J=level, wave=wave, mode="zero")  # Forward DWT
+        self.iwt = DWTInverse(wave=wave, mode="zero")  # Inverse DWT
 
-        self.mid_freq = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 1),
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(inplace=True),
-        )
+        # Learnable parameters for lowpass and highpass
+        self.alpha = nn.Parameter(torch.ones(1))
+        self.beta = nn.Parameter(torch.ones(1))
 
-        self.high_freq = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 1),
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(inplace=True),
-        )
-
-        # Frequency band weights
-        self.freq_weights = nn.Parameter(torch.ones(3))
-
-        # Final fusion
-        self.fusion = nn.Sequential(
-            nn.Conv2d(in_channels * 3, in_channels, 1),
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(inplace=True),
-        )
+        # 1x1 conv for lowpass and highpass
+        self.low_conv = nn.Conv2d(in_channels, in_channels, 1)
+        self.high_conv = nn.Conv2d(in_channels, in_channels, 1)
 
     def forward(self, x):
-        # FFT - This is where FFT is used
-        x_fft = torch.fft.rfft2(x)  # Real 2D FFT
+        # x: [B, C, H, W]
+        Yl, Yh = self.dwt(x)  # Yl: [B, C, H', W'], Yh: list of [B, C, 3, H', W']
 
-        # Split into frequency bands
-        B, C, H, W = x.shape
-        freq_mask = torch.ones_like(x_fft)
+        # Process lowpass
+        Yl_proc = self.low_conv(Yl)
 
-        # Process different frequency bands using inverse FFT
-        low_freq = self.low_freq(torch.fft.irfft2(x_fft * (freq_mask < 0.3), s=(H, W)))
-        mid_freq = self.mid_freq(
-            torch.fft.irfft2(x_fft * ((freq_mask >= 0.3) & (freq_mask < 0.7)), s=(H, W))
-        )
-        high_freq = self.high_freq(
-            torch.fft.irfft2(x_fft * (freq_mask >= 0.7), s=(H, W))
-        )
+        # Process highpass: sum across orientations (dim=2), then conv
+        Yh_sum = 0
+        for h in Yh:
+            # h: [B, C, 3, H', W']
+            h_sum = h.sum(dim=2)  # [B, C, H', W']
+            Yh_sum = Yh_sum + h_sum
+        Yh_proc = self.high_conv(Yh_sum)
 
-        # Weight and combine
-        weighted_outputs = [
-            low_freq * self.freq_weights[0],
-            mid_freq * self.freq_weights[1],
-            high_freq * self.freq_weights[2],
-        ]
+        # Combine with learnable weights
+        Yl_new = self.alpha * Yl_proc
+        Yh_new = [self.beta * h for h in Yh]  # Optionally, you can process Yh further
 
-        return self.fusion(torch.cat(weighted_outputs, dim=1))
+        # Reconstruct
+        x_rec = self.iwt(
+            (Yl_new + Yh_proc, Yh)
+        )  # You can also use (Yl_new, Yh_new) for more flexibility
+
+        # Residual connection
+        return x + x_rec
 
 
 class DualTransformerBlock(nn.Module):
@@ -277,7 +265,7 @@ class DualTransformerBlock(nn.Module):
     def __init__(self, in_dim, key_dim, value_dim, head_count=1, token_mlp="mix"):
         super().__init__()
         self.norm1 = nn.LayerNorm(in_dim)
-        self.attn = FrequencyWaveletAttention(in_channels=in_dim)
+        self.attn = WaveletAttention(in_channels=in_dim)
         self.norm2 = nn.LayerNorm(in_dim)
         self.norm3 = nn.LayerNorm(in_dim)
         self.channel_attn = ChannelAttention(in_dim)
