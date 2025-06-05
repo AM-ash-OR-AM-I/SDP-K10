@@ -6,7 +6,8 @@ from torchvision import transforms as T
 from tqdm import tqdm
 import numpy as np
 from datasets.dataset_kvasir import KvasirSegDataset
-from networks.DAEFormer import DAEFormer
+from networks.DAEFormer import DAEFormer as DAEFormer_orig
+from networks.DAEFormer_new import DAEFormer as DAEFormer_new
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, f1_score
 import matplotlib.pyplot as plt
 
@@ -31,6 +32,13 @@ def parse_args():
         default="cuda",
         choices=["cuda", "cpu"],
         help="Device to use for testing (default: cuda)",
+    )
+    parser.add_argument(
+        "--model_version",
+        type=str,
+        default="new",
+        choices=["original", "new"],
+        help="DAEFormer model version to use (default: new)",
     )
     return parser.parse_args()
 
@@ -57,8 +65,14 @@ def main():
     )
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
-    # Model
-    model = DAEFormer(num_classes=1).to(device)
+    # Model selection
+    if args.model_version == "original":
+        model = DAEFormer_orig(num_classes=1).to(device)
+        print("Using original DAEFormer implementation")
+    else:
+        model = DAEFormer_new(num_classes=1).to(device)
+        print("Using new DAEFormer implementation (WaveletAttention)")
+
     checkpoint = torch.load(args.volume_path, map_location=device)
     if "model_state_dict" in checkpoint:
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -100,12 +114,15 @@ def main():
 
     # Confusion Matrix
     cm = confusion_matrix(all_gts, all_preds)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Background", "Foreground"])
+    disp = ConfusionMatrixDisplay(
+        confusion_matrix=cm, display_labels=["Background", "Foreground"]
+    )
     disp.plot(cmap=plt.cm.Blues)
     plt.title("Pixel-wise Confusion Matrix")
     plt.savefig("confusion_matrix.png", dpi=200, bbox_inches="tight")
     plt.close()
     print("Confusion matrix saved as confusion_matrix.png")
+
 
 if __name__ == "__main__":
     main()
