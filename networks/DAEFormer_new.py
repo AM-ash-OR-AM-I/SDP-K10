@@ -3,7 +3,6 @@ import torch.nn as nn
 from einops import rearrange
 from einops.layers.torch import Rearrange
 from torch.nn import functional as F
-import pywt
 
 from networks.segformer import *
 
@@ -208,114 +207,65 @@ class ChannelAttention(nn.Module):
         return x
 
 
-class WaveletAttention(nn.Module):
-    """
-    Wavelet-based attention module that uses wavelet transform for spatial attention
-    Input -> x:[B, D, H, W]
-    Output -> [B, D, H, W]
-    """
-
-    def __init__(self, in_channels, wavelet="db1", level=1):
+class FrequencyWaveletAttention(nn.Module):
+    def __init__(self, in_channels):
         super().__init__()
         self.in_channels = in_channels
-        self.wavelet = wavelet
-        self.level = level
 
-        # Learnable parameters for wavelet coefficients
-        self.alpha = nn.Parameter(torch.ones(1))
-        self.beta = nn.Parameter(torch.ones(1))
+        # Frequency band processing
+        self.low_freq = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, 1),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+        )
 
-        # Convolution layers for processing wavelet coefficients
-        self.conv1 = nn.Conv2d(1, 1, 1)
-        self.conv2 = nn.Conv2d(1, 1, 1)
+        self.mid_freq = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, 1),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+        )
+
+        self.high_freq = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, 1),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+        )
+
+        # Frequency band weights
+        self.freq_weights = nn.Parameter(torch.ones(3))
+
+        # Final fusion
+        self.fusion = nn.Sequential(
+            nn.Conv2d(in_channels * 3, in_channels, 1),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+        )
 
     def forward(self, x):
+        # FFT - This is where FFT is used
+        x_fft = torch.fft.rfft2(x)  # Real 2D FFT
+
+        # Split into frequency bands
         B, C, H, W = x.shape
+        freq_mask = torch.ones_like(x_fft)
 
-        # Process each channel separately
-        output = []
-        for b in range(B):
-            channel_outputs = []
-            for c in range(C):
-                # Convert to numpy for wavelet transform
-                signal = x[b, c].detach().cpu().numpy()
+        # Process different frequency bands using inverse FFT
+        low_freq = self.low_freq(torch.fft.irfft2(x_fft * (freq_mask < 0.3), s=(H, W)))
+        mid_freq = self.mid_freq(
+            torch.fft.irfft2(x_fft * ((freq_mask >= 0.3) & (freq_mask < 0.7)), s=(H, W))
+        )
+        high_freq = self.high_freq(
+            torch.fft.irfft2(x_fft * (freq_mask >= 0.7), s=(H, W))
+        )
 
-                # Perform wavelet transform
-                coeffs = pywt.wavedec2(signal, self.wavelet, level=self.level)
+        # Weight and combine
+        weighted_outputs = [
+            low_freq * self.freq_weights[0],
+            mid_freq * self.freq_weights[1],
+            high_freq * self.freq_weights[2],
+        ]
 
-                # Process approximation coefficients
-                cA = torch.from_numpy(coeffs[0]).to(x.device)
-                cA = cA.unsqueeze(0).unsqueeze(0)  # [1, 1, H', W']
-                cA = self.conv1(cA)
-
-                # Process detail coefficients
-                detail_coeffs = []
-                for i in range(1, len(coeffs)):
-                    level_details = []
-                    for j in range(3):  # Horizontal, vertical, and diagonal details
-                        detail = torch.from_numpy(coeffs[i][j]).to(x.device)
-                        detail = detail.unsqueeze(0).unsqueeze(0)  # [1, 1, H', W']
-                        detail = self.conv2(detail)
-                        # Resize detail to match approximation size
-                        if detail.shape != cA.shape:
-                            detail = F.interpolate(
-                                detail,
-                                size=cA.shape[2:],
-                                mode="bilinear",
-                                align_corners=False,
-                            )
-                        level_details.append(detail)
-                    detail_coeffs.extend(level_details)
-
-                # Sum all detail coefficients (now they have the same size)
-                detail_sum = sum(detail_coeffs)
-
-                # Combine coefficients with learnable weights
-                combined = self.alpha * cA + self.beta * detail_sum
-
-                # Prepare coefficients for inverse transform
-                processed_coeffs = [combined.detach().squeeze().cpu().numpy()]
-
-                # Reconstruct detail coefficients for each level
-                detail_idx = 0
-                for i in range(1, len(coeffs)):
-                    level_coeffs = []
-                    for j in range(3):
-                        if detail_idx < len(detail_coeffs):
-                            # Resize back to original detail coefficient size
-                            detail = F.interpolate(
-                                detail_coeffs[detail_idx],
-                                size=coeffs[i][j].shape,
-                                mode="bilinear",
-                                align_corners=False,
-                            )
-                            detail = detail.detach().squeeze().cpu().numpy()
-                            level_coeffs.append(detail)
-                            detail_idx += 1
-                        else:
-                            level_coeffs.append(coeffs[i][j])
-                    processed_coeffs.append(tuple(level_coeffs))
-
-                # Perform inverse wavelet transform
-                reconstructed = pywt.waverec2(processed_coeffs, self.wavelet)
-
-                # Ensure the output has the same size as input
-                if reconstructed.shape != (H, W):
-                    reconstructed = reconstructed[:H, :W]
-
-                # Convert back to tensor
-                reconstructed = torch.from_numpy(reconstructed).to(x.device)
-                reconstructed = reconstructed.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
-                channel_outputs.append(reconstructed)
-
-            # Combine channel outputs
-            channel_output = torch.cat(channel_outputs, dim=1)  # [1, C, H, W]
-            output.append(channel_output)
-
-        # Combine batch outputs
-        output = torch.cat(output, dim=0)  # [B, C, H, W]
-
-        return output
+        return self.fusion(torch.cat(weighted_outputs, dim=1))
 
 
 class DualTransformerBlock(nn.Module):
@@ -327,7 +277,7 @@ class DualTransformerBlock(nn.Module):
     def __init__(self, in_dim, key_dim, value_dim, head_count=1, token_mlp="mix"):
         super().__init__()
         self.norm1 = nn.LayerNorm(in_dim)
-        self.attn = WaveletAttention(in_channels=in_dim, wavelet="db1", level=1)
+        self.attn = FrequencyWaveletAttention(in_channels=in_dim)
         self.norm2 = nn.LayerNorm(in_dim)
         self.norm3 = nn.LayerNorm(in_dim)
         self.channel_attn = ChannelAttention(in_dim)
