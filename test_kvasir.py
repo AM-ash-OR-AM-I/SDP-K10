@@ -49,6 +49,7 @@ def main():
     device = torch.device(
         args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu"
     )
+    num_workers = 4
 
     # Data paths
     images_dir = os.path.join("Kvasir-SEG", "images")
@@ -74,7 +75,7 @@ def main():
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=args.num_workers,
+        num_workers=num_workers,
         pin_memory=True,
     )
 

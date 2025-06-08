@@ -286,7 +286,6 @@ def main():
             # Update progress bar with timing information
             pbar.set_postfix(
                 {
-                    "loss": f"{loss.item():.4f}",
                     "avg_loss": f"{running_loss/((batch_idx+1)*args.batch_size):.4f}",
                     "data_time": f"{data_load_time:.3f}s",
                     "forward_time": f"{forward_time:.3f}s",

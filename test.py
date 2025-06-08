@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from datasets.dataset_synapse import Synapse_dataset
 from networks.DAEFormer import DAEFormer
+from networks.DAEFormer_new import DAEFormer as DAEFormer_new
 from utils import test_single_volume
 
 parser = argparse.ArgumentParser()
@@ -93,6 +94,13 @@ parser.add_argument(
 parser.add_argument("--tag", help="tag of experiment")
 parser.add_argument("--eval", action="store_true", help="Perform evaluation only")
 parser.add_argument("--throughput", action="store_true", help="Test throughput only")
+parser.add_argument(
+    "--model_version",
+    type=str,
+    default="original",
+    choices=["original", "new"],
+    help="DAEFormer model version to use (default: original)",
+)
 
 args = parser.parse_args()
 if args.dataset == "Synapse":
@@ -111,6 +119,7 @@ def inference(args, model, test_save_path=None):
     logging.info("{} test iterations per epoch".format(len(testloader)))
     model.eval()
     metric_list = 0.0
+    all_metrics = []
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         h, w = sampled_batch["image"].size()[2:]
         image, label, case_name = (
@@ -129,6 +138,7 @@ def inference(args, model, test_save_path=None):
             z_spacing=args.z_spacing,
         )
         metric_list += np.array(metric_i)
+        all_metrics.append(metric_i)
         logging.info(
             "idx %d case %s mean_dice %f mean_hd95 %f"
             % (
@@ -150,6 +160,19 @@ def inference(args, model, test_save_path=None):
         "Testing performance in best val model: mean_dice : %f mean_hd95 : %f"
         % (performance, mean_hd95)
     )
+    # Save final results to file
+    results_path = os.path.join(
+        args.output_dir, f"test_results_{args.model_version}.txt"
+    )
+    with open(results_path, "w") as f:
+        f.write(f"Testing Results for {args.model_version} model\n")
+        f.write(f"Mean Dice: {performance:.4f}\n")
+        f.write(f"Mean HD95: {mean_hd95:.4f}\n")
+        for i in range(1, args.num_classes):
+            f.write(
+                f"Class {i}: Dice={metric_list[i-1][0]:.4f}, HD95={metric_list[i-1][1]:.4f}\n"
+            )
+    print(f"\nFinal results saved to {results_path}")
     return "Testing Finished!"
 
 
@@ -180,7 +203,12 @@ if __name__ == "__main__":
     args.is_pretrain = True
 
     # Initialize model on CPU instead of CUDA
-    net = DAEFormer(num_classes=args.num_classes)
+    if args.model_version == "original":
+        net = DAEFormer(num_classes=args.num_classes)
+        logging.info("Using original DAEFormer implementation")
+    else:
+        net = DAEFormer_new(num_classes=args.num_classes)
+        logging.info("Using new DAEFormer implementation (WaveletAttention)")
 
     snapshot = os.path.join(args.output_dir, "best_model.pth")
     if not os.path.exists(snapshot):
