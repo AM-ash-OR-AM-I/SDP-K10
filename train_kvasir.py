@@ -172,7 +172,17 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
 
     # Dataset and DataLoader
-    transform = T.Compose(
+    train_transform = T.Compose(
+        [
+            T.Resize((args.img_size, args.img_size)),
+            T.RandomHorizontalFlip(),
+            T.RandomVerticalFlip(),
+            T.RandomRotation(15),
+            T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+            T.ToTensor(),
+        ]
+    )
+    val_transform = T.Compose(
         [
             T.Resize((args.img_size, args.img_size)),
             T.ToTensor(),
@@ -184,7 +194,7 @@ def main():
         args.images_dir,
         args.masks_dir,
         img_size=args.img_size,
-        transform=transform,
+        transform=train_transform,
         split="train",
         test_size=0.2,
         random_state=args.seed,
@@ -195,7 +205,7 @@ def main():
         args.images_dir,
         args.masks_dir,
         img_size=args.img_size,
-        transform=transform,
+        transform=val_transform,
         split="test",
         test_size=0.2,
         random_state=args.seed,
