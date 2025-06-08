@@ -10,6 +10,7 @@ from networks.DAEFormer import DAEFormer as DAEFormer_orig
 from networks.DAEFormer_new import DAEFormer as DAEFormer_new
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, f1_score
 import matplotlib.pyplot as plt
+import torch.nn as nn
 
 
 def parse_args():
@@ -61,9 +62,21 @@ def main():
         ]
     )
     test_dataset = KvasirSegDataset(
-        images_dir, masks_dir, img_size=args.img_size, transform=transform
+        images_dir,
+        masks_dir,
+        img_size=args.img_size,
+        transform=transform,
+        split="test",
+        test_size=0.2,
+        random_state=42,  # Use same seed as training
     )
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+    )
 
     # Model selection
     if args.model_version == "original":
@@ -85,31 +98,53 @@ def main():
     iou_scores = []
     all_preds = []
     all_gts = []
+    test_loss = 0.0
+    criterion = nn.BCEWithLogitsLoss()
+
     with torch.no_grad():
         for images, masks in tqdm(test_loader, desc="Testing"):
             images = images.to(device)
             masks = masks.to(device)
             outputs = model(images)
+
+            # Calculate loss
+            loss = criterion(outputs.squeeze(1), masks.squeeze(1))
+            test_loss += loss.item() * images.size(0)
+
             outputs = torch.sigmoid(outputs)
             preds = (outputs > 0.5).float()
+
             # Compute Dice and IoU
             intersection = (preds * masks).sum(dim=(1, 2, 3))
             union = (preds + masks).sum(dim=(1, 2, 3))
             dice = (2.0 * intersection) / (union + 1e-8)
             iou = intersection / (union - intersection + 1e-8)
+
             dice_scores.extend(dice.cpu().numpy())
             iou_scores.extend(iou.cpu().numpy())
+
             # For confusion matrix and F1
             all_preds.append(preds.cpu().numpy().astype(np.uint8).flatten())
             all_gts.append(masks.cpu().numpy().astype(np.uint8).flatten())
 
+    # Calculate average test loss
+    test_loss = test_loss / len(test_dataset)
+
     all_preds = np.concatenate(all_preds)
     all_gts = np.concatenate(all_gts)
 
-    # F1 Score (same as Dice for binary)
+    # Calculate metrics
     f1 = f1_score(all_gts, all_preds)
-    print(f"Mean Dice: {np.mean(dice_scores):.4f}")
-    print(f"Mean IoU: {np.mean(iou_scores):.4f}")
+    mean_dice = np.mean(dice_scores)
+    mean_iou = np.mean(iou_scores)
+    std_dice = np.std(dice_scores)
+    std_iou = np.std(iou_scores)
+
+    # Print comprehensive results
+    print("\nTest Results:")
+    print(f"Test Loss: {test_loss:.4f}")
+    print(f"Mean Dice Score: {mean_dice:.4f} ± {std_dice:.4f}")
+    print(f"Mean IoU Score: {mean_iou:.4f} ± {std_iou:.4f}")
     print(f"F1 Score (pixel): {f1:.4f}")
 
     # Confusion Matrix
@@ -117,11 +152,31 @@ def main():
     disp = ConfusionMatrixDisplay(
         confusion_matrix=cm, display_labels=["Background", "Foreground"]
     )
+    plt.figure(figsize=(8, 6))
     disp.plot(cmap=plt.cm.Blues)
     plt.title("Pixel-wise Confusion Matrix")
     plt.savefig("confusion_matrix.png", dpi=200, bbox_inches="tight")
     plt.close()
-    print("Confusion matrix saved as confusion_matrix.png")
+    print("\nConfusion matrix saved as confusion_matrix.png")
+
+    # Save test results to file
+    results = {
+        "test_loss": test_loss,
+        "mean_dice": mean_dice,
+        "std_dice": std_dice,
+        "mean_iou": mean_iou,
+        "std_iou": std_iou,
+        "f1_score": f1,
+    }
+
+    with open("test_results.txt", "w") as f:
+        f.write("Test Results:\n")
+        f.write(f"Test Loss: {test_loss:.4f}\n")
+        f.write(f"Mean Dice Score: {mean_dice:.4f} ± {std_dice:.4f}\n")
+        f.write(f"Mean IoU Score: {mean_iou:.4f} ± {std_iou:.4f}\n")
+        f.write(f"F1 Score (pixel): {f1:.4f}\n")
+
+    print("\nDetailed results saved to test_results.txt")
 
 
 if __name__ == "__main__":
