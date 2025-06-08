@@ -51,7 +51,6 @@ for bar in bars2:
     height = bar.get_height()
     ax2.text(
         bar.get_x() + bar.get_width() / 2.0,
-        height,
         f"{height:.2f}",
         ha="center",
         va="bottom",

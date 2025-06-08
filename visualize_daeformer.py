@@ -4,6 +4,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import numpy as np
 from networks.DAEFormer import DAEFormer
+from networks.DAEFormer_new import DAEFormer as DAEFormer_new
 import os
 
 
@@ -288,7 +289,7 @@ def visualize_segmentation_with_gt(
     return dice, iou
 
 
-def main(images_dir, masks_dir, model_path, save_dir):
+def main(images_dir, masks_dir, model_path, save_dir, model_type="original"):
     # Define the transform
     transform = transforms.Compose(
         [transforms.Resize((224, 224)), transforms.ToTensor()]
@@ -305,7 +306,12 @@ def main(images_dir, masks_dir, model_path, save_dir):
         num_classes = 9
     else:
         num_classes = 1
-    model = DAEFormer(num_classes=num_classes).to(device)
+
+    # Initialize the appropriate model based on model_type
+    if model_type == "new":
+        model = DAEFormer_new(num_classes=num_classes).to(device)
+    else:
+        model = DAEFormer(num_classes=num_classes).to(device)
 
     if os.path.exists(model_path):
         print(f"Loading model weights from {model_path}")
@@ -333,6 +339,10 @@ def main(images_dir, masks_dir, model_path, save_dir):
     iou_scores = []
     image_names = []
 
+    # Create model-specific subdirectory
+    model_save_dir = os.path.join(save_dir, model_type)
+    os.makedirs(model_save_dir, exist_ok=True)
+
     for idx, image_file in enumerate(image_files):
         image_path = os.path.join(images_dir, image_file)
         print(f"\nProcessing {image_file} for detailed transformation visualization")
@@ -345,9 +355,9 @@ def main(images_dir, masks_dir, model_path, save_dir):
             print(f"Error processing image {image_file}: {e}")
             continue
 
-        # Use folder structure: <save_dir>/<image_basename>/attention_maps/ and .../segmentation_results/
+        # Use folder structure: <save_dir>/<model_type>/<image_basename>/attention_maps/ and .../segmentation_results/
         image_base = os.path.splitext(image_file)[0]
-        parent_dir = os.path.join(save_dir, image_base)
+        parent_dir = os.path.join(model_save_dir, image_base)
         attention_save_dir = os.path.join(parent_dir, "attention_maps")
         segmentation_save_dir = os.path.join(parent_dir, "segmentation_results")
 
@@ -378,15 +388,15 @@ def main(images_dir, masks_dir, model_path, save_dir):
         plt.bar(x + width / 2, iou_scores, width, label="IoU")
         plt.xlabel("Image")
         plt.ylabel("Score")
-        plt.title("Dice and IoU Scores for Each Image")
+        plt.title(f"Dice and IoU Scores for Each Image ({model_type} model)")
         plt.xticks(x, image_names, rotation=90, fontsize=8)
         plt.ylim(0, 1)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, "summary_metrics.png"))
+        plt.savefig(os.path.join(model_save_dir, "summary_metrics.png"))
         plt.close()
         print(
-            f"Summary metrics plot saved to {os.path.join(save_dir, 'summary_metrics.png')}"
+            f"Summary metrics plot saved to {os.path.join(model_save_dir, 'summary_metrics.png')}"
         )
 
 
@@ -412,5 +422,15 @@ if __name__ == "__main__":
         required=False,
         default="all_visualizations/daeformer",
     )
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        required=False,
+        default="original",
+        choices=["original", "new"],
+        help="Type of model being used (original or new)",
+    )
     args = parser.parse_args()
-    main(args.images_dir, args.masks_dir, args.model_path, args.save_dir)
+    main(
+        args.images_dir, args.masks_dir, args.model_path, args.save_dir, args.model_type
+    )

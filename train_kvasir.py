@@ -126,24 +126,31 @@ def set_seed(seed, deterministic=True):
         torch.backends.cudnn.benchmark = True
 
 
-def plot_loss_graph(epoch_losses, epoch_avg_losses, save_path):
+def plot_loss_graph(epoch_losses, epoch_avg_losses, val_losses, save_path):
     """Plot and save the epoch vs loss graph with both current and average losses."""
     plt.figure(figsize=(10, 6))
     plt.plot(
         range(1, len(epoch_losses) + 1),
         epoch_losses,
         "b-",
-        label="Current Loss",
+        label="Train Loss",
         alpha=0.7,
     )
     plt.plot(
         range(1, len(epoch_avg_losses) + 1),
         epoch_avg_losses,
         "r-",
-        label="Average Loss",
+        label="Train Avg Loss",
         alpha=0.7,
     )
-    plt.title("Training Loss vs Epochs")
+    plt.plot(
+        range(1, len(val_losses) + 1),
+        val_losses,
+        "g-",
+        label="Validation Loss",
+        alpha=0.7,
+    )
+    plt.title("Training and Validation Loss vs Epochs")
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
     plt.grid(True)
@@ -172,18 +179,44 @@ def main():
         ]
     )
 
-    dataset = KvasirSegDataset(
-        args.images_dir, args.masks_dir, img_size=args.img_size, transform=transform
+    # Create train dataset
+    train_dataset = KvasirSegDataset(
+        args.images_dir,
+        args.masks_dir,
+        img_size=args.img_size,
+        transform=transform,
+        split="train",
+        test_size=0.2,
+        random_state=args.seed,
     )
 
-    dataloader = DataLoader(
-        dataset,
+    # Create validation dataset (using 20% of training data)
+    val_dataset = KvasirSegDataset(
+        args.images_dir,
+        args.masks_dir,
+        img_size=args.img_size,
+        transform=transform,
+        split="test",
+        test_size=0.2,
+        random_state=args.seed,
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=True,  # Enable pinned memory for faster GPU transfer
-        prefetch_factor=2,  # Number of batches to prefetch
-        persistent_workers=True,  # Keep workers alive between epochs
+        pin_memory=True,
+        prefetch_factor=2,
+        persistent_workers=True,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
     )
 
     # Model, Loss, Optimizer
@@ -204,20 +237,24 @@ def main():
 
     # Training Loop
     logging.info(f"Starting training on {device}")
-    logging.info(f"Dataset size: {len(dataset)}")
+    logging.info(f"Training dataset size: {len(train_dataset)}")
+    logging.info(f"Validation dataset size: {len(val_dataset)}")
     logging.info(f"Batch size: {args.batch_size}")
     logging.info(f"Number of epochs: {args.num_epochs}")
 
     best_loss = float("inf")
     epoch_losses = []  # List to store epoch losses for plotting
     epoch_avg_losses = []  # List to store epoch average losses for plotting
+    val_losses = []  # List to store validation losses for plotting
+
     for epoch in range(args.num_epochs):
+        # Training phase
         model.train()
         running_loss = 0.0
         epoch_start_time = time.time()
 
-        # Progress bar
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs}")
+        # Progress bar for training
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Train]")
 
         for batch_idx, (images, masks) in enumerate(pbar):
             batch_start_time = time.time()
@@ -257,25 +294,34 @@ def main():
                 }
             )
 
-            if batch_idx == 0:  # Log shapes only for first batch
-                logging.info(f"images shape: {images.shape}")
-                logging.info(f"masks shape: {masks.shape}")
-                logging.info(f"outputs shape: {outputs.shape}")
-                logging.info(f"Data load time: {data_load_time:.3f}s")
-                logging.info(f"Forward pass time: {forward_time:.3f}s")
-                logging.info(f"Backward pass time: {backward_time:.3f}s")
-
-        epoch_loss = running_loss / len(dataset)
+        epoch_loss = running_loss / len(train_dataset)
         epoch_avg_loss = running_loss / ((batch_idx + 1) * args.batch_size)
-        epoch_losses.append(epoch_loss)  # Store the epoch loss
-        epoch_avg_losses.append(epoch_avg_loss)  # Store the epoch average loss
+        epoch_losses.append(epoch_loss)
+        epoch_avg_losses.append(epoch_avg_loss)
+
+        # Validation phase
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Val]")
+            for images, masks in val_pbar:
+                images, masks = images.to(device), masks.to(device)
+                outputs = model(images)
+                outputs = outputs.squeeze(1)
+                loss = criterion(outputs, masks.squeeze(1))
+                val_loss += loss.item() * images.size(0)
+                val_pbar.set_postfix({"val_loss": f"{loss.item():.4f}"})
+
+        val_loss = val_loss / len(val_dataset)
+        val_losses.append(val_loss)
+
         epoch_time = time.time() - epoch_start_time
 
         # Log epoch statistics
         logging.info(
             f"Epoch [{epoch+1}/{args.num_epochs}] "
-            f"Loss: {epoch_loss:.4f} "
-            f"Avg Loss: {epoch_avg_loss:.4f} "
+            f"Train Loss: {epoch_loss:.4f} "
+            f"Val Loss: {val_loss:.4f} "
             f"Time: {epoch_time:.2f}s"
         )
 
@@ -283,12 +329,13 @@ def main():
         plot_loss_graph(
             epoch_losses,
             epoch_avg_losses,
+            val_losses,
             os.path.join(args.save_dir, f"loss_graph_{args.model_version}.png"),
         )
 
-        # Save best model
-        if epoch_loss < best_loss:
-            best_loss = epoch_loss
+        # Save best model based on validation loss
+        if val_loss < best_loss:
+            best_loss = val_loss
             best_model_path = os.path.join(
                 args.save_dir, f"best_model_{args.model_version}.pth"
             )
@@ -297,7 +344,8 @@ def main():
                     "epoch": epoch + 1,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
-                    "loss": epoch_loss,
+                    "train_loss": epoch_loss,
+                    "val_loss": val_loss,
                     "model_version": args.model_version,
                 },
                 best_model_path,
@@ -314,7 +362,8 @@ def main():
                     "epoch": epoch + 1,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
-                    "loss": epoch_loss,
+                    "train_loss": epoch_loss,
+                    "val_loss": val_loss,
                     "model_version": args.model_version,
                 },
                 checkpoint_path,
@@ -322,7 +371,7 @@ def main():
             logging.info(f"Checkpoint saved: {checkpoint_path}")
 
     logging.info("Training complete!")
-    logging.info(f"Best loss achieved: {best_loss:.4f}")
+    logging.info(f"Best validation loss achieved: {best_loss:.4f}")
 
 
 if __name__ == "__main__":
